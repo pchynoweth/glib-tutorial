@@ -9,6 +9,7 @@
 
 static GMainLoop *main_loop = NULL;
 static GCancellable *cancellable = NULL;
+static guint timeout_source_id = 0;
 
 /* Slow task that might timeout */
 static void slow_task_func(GTask *task,
@@ -49,6 +50,7 @@ static gboolean on_timeout(gpointer user_data)
             timeout_ms);
     
     g_cancellable_cancel(cancellable);
+    timeout_source_id = 0;  /* Mark as removed */
     
     return G_SOURCE_REMOVE;  /* Don't repeat */
 }
@@ -60,6 +62,12 @@ static void on_task_complete(GObject *source,
 {
     const gchar *label = (const gchar *)user_data;
     GError *error = NULL;
+    
+    /* Remove timeout if it hasn't fired yet */
+    if (timeout_source_id != 0) {
+        g_source_remove(timeout_source_id);
+        timeout_source_id = 0;
+    }
     
     gboolean success = g_task_propagate_boolean(G_TASK(result), &error);
     
@@ -89,8 +97,8 @@ static void run_with_timeout(gint work_time_ms, gint timeout_ms, const gchar *la
     }
     cancellable = g_cancellable_new();
     
-    /* Set up timeout */
-    g_timeout_add(timeout_ms, on_timeout, GINT_TO_POINTER(timeout_ms));
+    /* Set up timeout and store the source ID */
+    timeout_source_id = g_timeout_add(timeout_ms, on_timeout, GINT_TO_POINTER(timeout_ms));
     
     /* Start the task */
     GTask *task = g_task_new(NULL, cancellable, on_task_complete, (gpointer)label);
@@ -125,6 +133,7 @@ int main(void)
     g_print("\n=== Key Points ===\n");
     g_print("- Use GCancellable for cancellation support\n");
     g_print("- Set up timeout with g_timeout_add()\n");
+    g_print("- Store timeout source ID and remove with g_source_remove()\n");
     g_print("- Check g_cancellable_is_cancelled() in task loop\n");
     g_print("- Cancel triggers G_IO_ERROR_CANCELLED\n");
     g_print("- Check frequently for responsive cancellation\n");
