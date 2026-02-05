@@ -1,8 +1,8 @@
 # Top-level Makefile for GLib Tutorial
 
-.PHONY: all clean lesson01 lesson02 lesson03 lesson04 lesson05 lesson06 lesson07 lesson08
+.PHONY: all clean lesson01 lesson02 lesson03 lesson04 lesson05 lesson06 lesson07 lesson08 lesson09
 
-all: lesson01 lesson02 lesson03 lesson04 lesson05 lesson06 lesson07 lesson08
+all: lesson01 lesson02 lesson03 lesson04 lesson05 lesson06 lesson07 lesson08 lesson09
 
 lesson01:
 	@echo "Building Lesson 1..."
@@ -36,6 +36,10 @@ lesson08:
 	@echo "Building Lesson 8..."
 	@$(MAKE) -C lessons/08-advanced-topics
 
+lesson09:
+	@echo "Building Lesson 9..."
+	@$(MAKE) -C lessons/09-io-uring-gsource
+
 clean:
 	@echo "Cleaning all lessons..."
 	@$(MAKE) -C lessons/01-introduction-and-setup clean
@@ -46,3 +50,4 @@ clean:
 	@$(MAKE) -C lessons/06-user-defined-tasks clean
 	@$(MAKE) -C lessons/07-async-operations clean
 	@$(MAKE) -C lessons/08-advanced-topics clean
+	@$(MAKE) -C lessons/09-io-uring-gsource clean
