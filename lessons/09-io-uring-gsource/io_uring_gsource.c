@@ -58,11 +58,19 @@ static gboolean io_uring_source_dispatch(GSource *source,
             g_print("[io_uring] Operation completed: %d bytes\n", cqe->res);
         }
         
-        /* Store user_data to identify the operation */
+        /* Get user_data to identify the operation type */
         gpointer op_data = io_uring_cqe_get_data(cqe);
-        if (op_data) {
+        
+        /* Free buffer only if user_data is a heap-allocated buffer.
+         * We distinguish between buffer pointers and fd values by checking
+         * if the value looks like a small integer (fd) or a heap pointer.
+         * This is a simplified check for this example.
+         */
+        if (op_data && GPOINTER_TO_INT(op_data) > 1024) {
+            /* Likely a heap pointer (buffer), free it */
             g_free(op_data);
         }
+        /* If op_data is small (< 1024), it's likely an fd value, don't free */
     }
     
     /* Mark all CQEs as seen */
@@ -159,20 +167,31 @@ static gboolean submit_write_operation(IoUringSource *uring_source,
         return FALSE;
     }
     
-    /* Prepare the write operation */
+    /* Prepare the write operation
+     * The offset parameter (0) specifies where in the file to write.
+     * For sequential writes, use the current file position or track offset.
+     */
     io_uring_prep_write(sqe, fd, buffer, length, 0);
     
-    /* Set user data to track this operation */
+    /* Set user data to track this operation and the buffer to free */
     io_uring_sqe_set_data(sqe, buffer);
     
-    /* Set flag to close the fd after operation completes */
+    /* Link this write with a close operation so close executes after write.
+     * Note: IOSQE_IO_LINK means the next operation only executes if this succeeds.
+     * For this simple example, this is acceptable behavior.
+     */
     sqe->flags |= IOSQE_IO_LINK;
     
-    /* Get another SQE for close operation */
+    /* Get another SQE for close operation to clean up the file descriptor */
     sqe = io_uring_get_sqe(&uring_source->ring);
     if (sqe) {
         io_uring_prep_close(sqe, fd);
-        io_uring_sqe_set_data(sqe, NULL);
+        /* Mark close with special user_data (cast fd to pointer) to distinguish it */
+        io_uring_sqe_set_data(sqe, GINT_TO_POINTER(fd));
+    } else {
+        /* Fallback: if we can't queue the close, do it synchronously */
+        g_print("[Warning] Could not queue close operation, closing synchronously\n");
+        close(fd);
     }
     
     g_print("[Submit] Write operation prepared (%zu bytes)\n", length);
@@ -191,18 +210,26 @@ static gboolean submit_write_operation(IoUringSource *uring_source,
     return TRUE;
 }
 
+/* Structure to track completion state */
+typedef struct {
+    int expected_completions;
+    int completed_count;
+    GMainLoop *main_loop;
+} CompletionState;
+
 /* Callback for when operations complete */
 static gboolean on_operation_complete(gpointer user_data)
 {
-    static int completed_count = 0;
-    completed_count++;
+    CompletionState *state = (CompletionState *)user_data;
+    state->completed_count++;
     
-    g_print("[Callback] Operation %d completed\n", completed_count);
+    g_print("[Callback] Operation %d/%d completed\n",
+            state->completed_count, state->expected_completions);
     
-    /* Quit after all operations are done */
-    if (completed_count >= 2) {  /* write + close operations */
+    /* Quit after all expected operations are done */
+    if (state->completed_count >= state->expected_completions) {
         g_print("[Callback] All operations completed, quitting main loop\n");
-        g_main_loop_quit(main_loop);
+        g_main_loop_quit(state->main_loop);
         return G_SOURCE_REMOVE;
     }
     
@@ -215,11 +242,17 @@ int main(int argc, char *argv[])
     GSource *source;
     const gchar *test_content;
     const gchar *filename = "/tmp/io_uring_test.txt";
+    CompletionState completion_state;
     
     g_print("=== io_uring GLib GSource Integration ===\n\n");
     
     /* Create the main loop */
     main_loop = g_main_loop_new(NULL, FALSE);
+    
+    /* Initialize completion state - expecting 2 operations: write + close */
+    completion_state.expected_completions = 2;
+    completion_state.completed_count = 0;
+    completion_state.main_loop = main_loop;
     
     /* Create the io_uring source */
     uring_source = io_uring_source_new();
@@ -231,8 +264,8 @@ int main(int argc, char *argv[])
     
     source = (GSource *)uring_source;
     
-    /* Set the callback for completions */
-    g_source_set_callback(source, on_operation_complete, NULL, NULL);
+    /* Set the callback for completions, passing our state */
+    g_source_set_callback(source, on_operation_complete, &completion_state, NULL);
     
     /* Attach to the default main context */
     g_source_attach(source, NULL);
